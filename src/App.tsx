@@ -25,9 +25,16 @@ import {
   History,
   TrendingUp,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  Search,
+  X,
+  Disc3,
+  SlidersHorizontal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { FixedSizeList as ListWindow } from 'react-window';
+import * as jsmediatags from 'jsmediatags/dist/jsmediatags.min.js';
+import { AutoSizer } from 'react-virtualized-auto-sizer';
 
 // --- Types ---
 interface Track {
@@ -39,7 +46,7 @@ interface Track {
   duration?: number;
 }
 
-type Tab = 'musica' | 'album' | 'playlist' | 'definicao';
+type Tab = 'musica' | 'album' | 'playlist' | 'dj' | 'definicao';
 type PlaylistSubTab = 'playlist' | 'recentes' | 'tocadas' | 'mais_tocadas';
 
 // --- Components ---
@@ -74,6 +81,327 @@ const NeonButton = ({
   );
 };
 
+const VirtualDJ = ({ playlist }: { playlist: Track[] }) => {
+  const [deckA, setDeckA] = useState<Track | null>(null);
+  const [deckB, setDeckB] = useState<Track | null>(null);
+  const [isPlayingA, setIsPlayingA] = useState(false);
+  const [isPlayingB, setIsPlayingB] = useState(false);
+  const [rateA, setRateA] = useState(1);
+  const [rateB, setRateB] = useState(1);
+  const [crossfader, setCrossfader] = useState(0);
+  const [openDropdown, setOpenDropdown] = useState<'A' | 'B' | null>(null);
+
+  const [reverbA, setReverbA] = useState(0);
+  const [echoA, setEchoA] = useState(0);
+  const [reverbB, setReverbB] = useState(0);
+  const [echoB, setEchoB] = useState(0);
+
+  const audioARef = useRef<HTMLAudioElement | null>(null);
+  const audioBRef = useRef<HTMLAudioElement | null>(null);
+
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const reverbGainARef = useRef<GainNode | null>(null);
+  const echoGainARef = useRef<GainNode | null>(null);
+  const reverbGainBRef = useRef<GainNode | null>(null);
+  const echoGainBRef = useRef<GainNode | null>(null);
+
+  const initAudio = () => {
+    if (!audioCtxRef.current) {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContext();
+      audioCtxRef.current = ctx;
+
+      const createReverb = () => {
+        const length = ctx.sampleRate * 2.0;
+        const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
+        for (let c = 0; c < 2; c++) {
+          const data = buffer.getChannelData(c);
+          for (let i = 0; i < length; i++) {
+            data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 3);
+          }
+        }
+        const convolver = ctx.createConvolver();
+        convolver.buffer = buffer;
+        return convolver;
+      };
+
+      const setupDeck = (audioEl: HTMLAudioElement, reverbGainRef: any, echoGainRef: any) => {
+        const source = ctx.createMediaElementSource(audioEl);
+
+        // Dry route
+        source.connect(ctx.destination);
+
+        // Reverb route
+        const convolver = createReverb();
+        const reverbGain = ctx.createGain();
+        reverbGain.gain.value = 0;
+        source.connect(convolver);
+        convolver.connect(reverbGain);
+        reverbGain.connect(ctx.destination);
+        reverbGainRef.current = reverbGain;
+
+        // Echo route
+        const delay = ctx.createDelay();
+        delay.delayTime.value = 0.33; // 330ms
+        const feedback = ctx.createGain();
+        feedback.gain.value = 0.4;
+        const echoGain = ctx.createGain();
+        echoGain.gain.value = 0;
+
+        source.connect(delay);
+        delay.connect(feedback);
+        feedback.connect(delay);
+        delay.connect(echoGain);
+        echoGain.connect(ctx.destination);
+        echoGainRef.current = echoGain;
+      };
+
+      if (audioARef.current) setupDeck(audioARef.current, reverbGainARef, echoGainARef);
+      if (audioBRef.current) setupDeck(audioBRef.current, reverbGainBRef, echoGainBRef);
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (audioARef.current) {
+      if (isPlayingA) {
+        initAudio();
+        audioARef.current.play().catch(() => {});
+      }
+      else audioARef.current.pause();
+    }
+  }, [isPlayingA, deckA]);
+
+  useEffect(() => {
+    if (audioBRef.current) {
+      if (isPlayingB) {
+        initAudio();
+        audioBRef.current.play().catch(() => {});
+      }
+      else audioBRef.current.pause();
+    }
+  }, [isPlayingB, deckB]);
+
+  useEffect(() => {
+    if (audioARef.current) audioARef.current.playbackRate = rateA;
+  }, [rateA]);
+
+  useEffect(() => {
+    if (audioBRef.current) audioBRef.current.playbackRate = rateB;
+  }, [rateB]);
+
+  useEffect(() => {
+    const val = crossfader;
+    if (audioARef.current) {
+      audioARef.current.volume = Math.min(1, 1 - val);
+    }
+    if (audioBRef.current) {
+      audioBRef.current.volume = Math.min(1, 1 + val);
+    }
+  }, [crossfader]);
+
+  useEffect(() => {
+    if (reverbGainARef.current) reverbGainARef.current.gain.value = reverbA;
+  }, [reverbA]);
+  useEffect(() => {
+    if (echoGainARef.current) echoGainARef.current.gain.value = echoA;
+  }, [echoA]);
+  useEffect(() => {
+    if (reverbGainBRef.current) reverbGainBRef.current.gain.value = reverbB;
+  }, [reverbB]);
+  useEffect(() => {
+    if (echoGainBRef.current) echoGainBRef.current.gain.value = echoB;
+  }, [echoB]);
+
+  const renderDeck = (
+    deckId: 'A' | 'B',
+    label: string, 
+    track: Track | null, 
+    setTrack: (t: Track) => void, 
+    isPlaying: boolean, 
+    setIsPlaying: (p: boolean) => void,
+    rate: number,
+    setRate: (r: number) => void,
+    reverb: number,
+    setReverb: (r: number) => void,
+    echo: number,
+    setEcho: (e: number) => void,
+    audioRef: React.RefObject<HTMLAudioElement>
+  ) => {
+    const isOpen = openDropdown === deckId;
+    
+    return (
+    <div className="flex-1 bg-white/5 rounded-2xl p-4 border border-white/10 flex flex-col gap-4 relative">
+      <div className="flex justify-between items-center">
+        <h3 className="font-bold tracking-tight text-cyan-400">{label}</h3>
+        <div className="relative">
+          <button 
+            className="bg-black/50 text-white text-xs p-2 rounded border border-white/20 w-[150px] md:w-[200px] text-left truncate flex justify-between items-center"
+            onClick={() => setOpenDropdown(isOpen ? null : deckId)}
+          >
+            <span className="truncate">{track?.title || "Selecionar Música"}</span>
+            <span className="ml-2 text-white/50">▼</span>
+          </button>
+          
+          <AnimatePresence>
+            {isOpen && (
+              <motion.div 
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="absolute top-full mt-1 right-0 w-[200px] md:w-[250px] bg-[#111] border border-white/20 rounded-lg shadow-2xl z-50 overflow-hidden"
+              >
+                {playlist.length === 0 ? (
+                  <div className="p-3 text-xs text-white/50 text-center">Nenhuma música na playlist</div>
+                ) : (
+                  <div style={{ height: Math.min(playlist.length * 36, 200) }}>
+                    <AutoSizer renderProp={({ height, width }) => (
+                        <ListWindow
+                          height={height || 200}
+                          itemCount={playlist.length}
+                          itemSize={36}
+                          width={width || 200}
+                        >
+                          {({ index, style }) => {
+                            const t = playlist[index];
+                            return (
+                              <div 
+                                style={style} 
+                                className={`px-3 py-2 text-xs cursor-pointer truncate hover:bg-white/10 transition-colors ${track?.id === t.id ? 'text-cyan-400 bg-white/5' : 'text-white'}`}
+                                onClick={() => {
+                                  setTrack(t);
+                                  setIsPlaying(true);
+                                  setOpenDropdown(null);
+                                }}
+                              >
+                                {t.title}
+                              </div>
+                            );
+                          }}
+                        </ListWindow>
+                      )} />
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 py-4">
+        <div className={`w-32 h-32 md:w-48 md:h-48 rounded-full border-4 ${isPlaying ? 'border-cyan-400 animate-[spin_4s_linear_infinite]' : 'border-white/20'} overflow-hidden relative`}>
+          <img src={track?.cover || "https://picsum.photos/seed/dj/400/400"} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-8 h-8 md:w-12 md:h-12 bg-black rounded-full border-2 border-white/20" />
+          </div>
+        </div>
+        
+        <div className="text-center">
+          <p className="font-bold text-sm md:text-base truncate w-48 md:w-64">{track?.title || "Nenhuma Música"}</p>
+          <p className="text-xs md:text-sm text-white/50 truncate w-48 md:w-64">{track?.artist || "-"}</p>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex gap-2">
+            <button 
+              onClick={() => setIsPlaying(!isPlaying)}
+              className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-cyan-400 text-black flex items-center justify-center hover:scale-105 transition-all"
+            >
+              {isPlaying ? <Pause className="w-4 h-4 md:w-5 md:h-5" /> : <Play className="w-4 h-4 md:w-5 md:h-5 ml-1" />}
+            </button>
+            <button 
+              onClick={() => {
+                if (audioRef.current) {
+                  audioRef.current.currentTime = 0;
+                  setIsPlaying(true);
+                }
+              }}
+              className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-white/10 text-white flex items-center justify-center hover:bg-white/20 transition-all font-bold text-[10px] md:text-xs"
+            >
+              CUE
+            </button>
+          </div>
+          
+          <div className="flex flex-col items-center w-24 md:w-32">
+            <span className="text-[10px] text-white/50 mb-1">PITCH {(rate * 100).toFixed(0)}%</span>
+            <input 
+              type="range" 
+              min="0.5" max="1.5" step="0.01" 
+              value={rate} 
+              onChange={(e) => setRate(parseFloat(e.target.value))}
+              className="w-full accent-cyan-400"
+            />
+          </div>
+        </div>
+
+        {/* Effects Controls */}
+        <div className="flex gap-4 p-3 bg-black/30 rounded-xl border border-white/5">
+          <div className="flex-1 flex flex-col items-center">
+            <span className="text-[10px] text-white/50 mb-1">REVERB</span>
+            <input 
+              type="range" 
+              min="0" max="1" step="0.01" 
+              value={reverb} 
+              onChange={(e) => setReverb(parseFloat(e.target.value))}
+              className="w-full accent-purple-400"
+            />
+          </div>
+          <div className="flex-1 flex flex-col items-center">
+            <span className="text-[10px] text-white/50 mb-1">ECHO</span>
+            <input 
+              type="range" 
+              min="0" max="1" step="0.01" 
+              value={echo} 
+              onChange={(e) => setEcho(parseFloat(e.target.value))}
+              className="w-full accent-blue-400"
+            />
+          </div>
+        </div>
+      </div>
+      <audio ref={audioRef} src={track?.url} onEnded={() => setIsPlaying(false)} />
+    </div>
+    );
+  };
+
+  return (
+    <div className="flex flex-col h-full gap-4 md:gap-6">
+      <div className="flex flex-col md:flex-row gap-4 flex-1">
+        {renderDeck('A', "DECK A", deckA, setDeckA, isPlayingA, setIsPlayingA, rateA, setRateA, reverbA, setReverbA, echoA, setEchoA, audioARef)}
+        {renderDeck('B', "DECK B", deckB, setDeckB, isPlayingB, setIsPlayingB, rateB, setRateB, reverbB, setReverbB, echoB, setEchoB, audioBRef)}
+      </div>
+      
+      <div className="bg-white/5 rounded-2xl p-4 md:p-6 border border-white/10 flex flex-col items-center gap-4">
+        <h3 className="font-medium tracking-tight text-xs tracking-widest text-white/50 flex items-center gap-2">
+          <SlidersHorizontal className="w-4 h-4" /> CROSSFADER
+        </h3>
+        <div className="w-full max-w-md flex items-center gap-4">
+          <span className="text-cyan-400 font-bold text-sm">A</span>
+          <input 
+            type="range" 
+            min="-1" max="1" step="0.01" 
+            value={crossfader} 
+            onChange={(e) => setCrossfader(parseFloat(e.target.value))}
+            className="flex-1 accent-cyan-400 h-2 bg-white/10 rounded-full appearance-none"
+          />
+          <span className="text-cyan-400 font-bold text-sm">B</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -89,6 +417,7 @@ export default function App() {
   const [isShuffle, setIsShuffle] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
   const [background, setBackground] = useState('https://picsum.photos/seed/abstract/1920/1080');
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [language, setLanguage] = useState('pt');
@@ -100,8 +429,129 @@ export default function App() {
   
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const bassFilterRef = useRef<BiquadFilterNode | null>(null);
+  const midFilterRef = useRef<BiquadFilterNode | null>(null);
+  const trebleFilterRef = useRef<BiquadFilterNode | null>(null);
 
   const currentTrack = currentTrackIndex >= 0 ? playlist[currentTrackIndex] : null;
+
+  const filteredPlaylist = playlist.filter(track => 
+    track.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    track.artist.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const metadataQueue = useRef<{file: File, id: string}[]>([]);
+  const isProcessingMetadata = useRef(false);
+
+  const processMetadataQueue = () => {
+    if (metadataQueue.current.length === 0) {
+      isProcessingMetadata.current = false;
+      return;
+    }
+    isProcessingMetadata.current = true;
+    
+    const batch = metadataQueue.current.splice(0, 10);
+    let completed = 0;
+    const updates: Record<string, Partial<Track>> = {};
+
+    const checkBatchComplete = () => {
+      completed++;
+      if (completed === batch.length) {
+        if (Object.keys(updates).length > 0) {
+          setPlaylist(prev => prev.map(t => {
+            if (updates[t.id]) {
+              return { ...t, ...updates[t.id] };
+            }
+            return t;
+          }));
+        }
+        setTimeout(processMetadataQueue, 50);
+      }
+    };
+
+    batch.forEach(({file, id}) => {
+      jsmediatags.read(file, {
+        onSuccess: function(tag) {
+          let coverUrl: string | undefined;
+          if (tag.tags.picture) {
+            const data = tag.tags.picture.data;
+            const format = tag.tags.picture.format;
+            const byteArray = new Uint8Array(data);
+            const blob = new Blob([byteArray], { type: format });
+            coverUrl = URL.createObjectURL(blob);
+          }
+          
+          updates[id] = {
+            title: tag.tags.title || undefined,
+            artist: tag.tags.artist || undefined,
+            cover: coverUrl
+          };
+          checkBatchComplete();
+        },
+        onError: function(error) {
+          checkBatchComplete();
+        }
+      });
+    });
+  };
+
+  const queueMetadataLoad = (file: File, id: string) => {
+    metadataQueue.current.push({file, id});
+    if (!isProcessingMetadata.current) {
+      processMetadataQueue();
+    }
+  };
+
+  const initAudioContext = () => {
+    if (!audioContextRef.current && audioRef.current) {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContext();
+      audioContextRef.current = ctx;
+
+      const source = ctx.createMediaElementSource(audioRef.current);
+      sourceNodeRef.current = source;
+
+      const bass = ctx.createBiquadFilter();
+      bass.type = 'lowshelf';
+      bass.frequency.value = 200;
+      bassFilterRef.current = bass;
+
+      const mid = ctx.createBiquadFilter();
+      mid.type = 'peaking';
+      mid.frequency.value = 1000;
+      mid.Q.value = 1;
+      midFilterRef.current = mid;
+
+      const treble = ctx.createBiquadFilter();
+      treble.type = 'highshelf';
+      treble.frequency.value = 3000;
+      trebleFilterRef.current = treble;
+
+      source.connect(bass);
+      bass.connect(mid);
+      mid.connect(treble);
+      treble.connect(ctx.destination);
+      
+      // Apply initial equalizer settings
+      bass.gain.value = ((equalizer.bass - 50) / 50) * 12;
+      mid.gain.value = ((equalizer.mid - 50) / 50) * 12;
+      treble.gain.value = ((equalizer.treble - 50) / 50) * 12;
+    }
+  };
+
+  useEffect(() => {
+    if (bassFilterRef.current) {
+      bassFilterRef.current.gain.value = ((equalizer.bass - 50) / 50) * 12;
+    }
+    if (midFilterRef.current) {
+      midFilterRef.current.gain.value = ((equalizer.mid - 50) / 50) * 12;
+    }
+    if (trebleFilterRef.current) {
+      trebleFilterRef.current.gain.value = ((equalizer.treble - 50) / 50) * 12;
+    }
+  }, [equalizer]);
 
   useEffect(() => {
     const timer = setTimeout(() => setShowSplash(false), 2500);
@@ -124,6 +574,10 @@ export default function App() {
   useEffect(() => {
     if (audioRef.current) {
       if (isPlaying) {
+        initAudioContext();
+        if (audioContextRef.current?.state === 'suspended') {
+          audioContextRef.current.resume();
+        }
         audioRef.current.play().catch(e => console.error("Playback failed", e));
       } else {
         audioRef.current.pause();
@@ -158,19 +612,22 @@ export default function App() {
         try {
           const dirHandle = await (window as any).showDirectoryPicker();
           const tracks: Track[] = [];
+          const filesToProcess: {file: File, id: string}[] = [];
           
           async function processEntries(handle: any) {
             for await (const entry of handle.values()) {
               if (entry.kind === 'file') {
                 const file = await entry.getFile();
                 if (file.type.startsWith('audio/') || file.name.endsWith('.mp3') || file.name.endsWith('.wav') || file.name.endsWith('.m4a')) {
+                  const id = Math.random().toString(36).substr(2, 9);
                   tracks.push({
-                    id: Math.random().toString(36).substr(2, 9),
+                    id,
                     title: file.name.replace(/\.[^/.]+$/, ""),
                     artist: "Local Artist",
                     url: URL.createObjectURL(file),
                     cover: `https://picsum.photos/seed/${file.name}/400/400`
                   });
+                  filesToProcess.push({ file, id });
                 }
               } else if (entry.kind === 'directory') {
                 await processEntries(entry);
@@ -180,9 +637,15 @@ export default function App() {
           
           await processEntries(dirHandle);
           if (tracks.length > 0) {
-            setPlaylist(tracks);
-            setCurrentTrackIndex(0);
-            setIsPlaying(false);
+            setPlaylist(prev => {
+              const newPlaylist = [...prev, ...tracks];
+              if (currentTrackIndex === -1) {
+                setCurrentTrackIndex(0);
+                setIsPlaying(false);
+              }
+              return newPlaylist;
+            });
+            filesToProcess.forEach(({file, id}) => queueMetadataLoad(file, id));
           }
         } catch (pickerErr: any) {
           // If showDirectoryPicker fails due to security or other reasons, use fallback
@@ -201,9 +664,10 @@ export default function App() {
   };
 
   const addTracks = (files: FileList) => {
-    const newTracks: Track[] = Array.from(files)
-      .filter(file => file.type.startsWith('audio/') || file.name.endsWith('.mp3') || file.name.endsWith('.wav') || file.name.endsWith('.m4a'))
-      .map(file => ({
+    const validFiles = Array.from(files)
+      .filter(file => file.type.startsWith('audio/') || file.name.endsWith('.mp3') || file.name.endsWith('.wav') || file.name.endsWith('.m4a'));
+      
+    const newTracks: Track[] = validFiles.map(file => ({
         id: Math.random().toString(36).substr(2, 9),
         title: file.name.replace(/\.[^/.]+$/, ""),
         artist: "Local Artist",
@@ -215,6 +679,10 @@ export default function App() {
     if (currentTrackIndex === -1 && newTracks.length > 0) {
       setCurrentTrackIndex(0);
     }
+
+    validFiles.forEach((file, index) => {
+      queueMetadataLoad(file, newTracks[index].id);
+    });
   };
 
   const playTrack = (track: Track) => {
@@ -286,7 +754,7 @@ export default function App() {
       `}
     >
       <Icon className={`w-4 h-4 ${active ? 'neon-text-cyan' : ''}`} />
-      <span className="font-rajdhani font-semibold tracking-wide text-sm">{label}</span>
+      <span className="font-sans font-semibold tracking-wide text-sm">{label}</span>
       {hasSubItems && (
         <ChevronDown className={`w-3 h-3 transition-transform ${active ? 'rotate-180' : ''}`} />
       )}
@@ -299,7 +767,26 @@ export default function App() {
       className={`flex flex-col items-center justify-center gap-1 flex-1 py-2 transition-all ${active ? 'text-cyan-400' : 'text-white/40'}`}
     >
       <Icon className={`w-5 h-5 ${active ? 'neon-text-cyan' : ''}`} />
-      <span className="text-[10px] font-orbitron uppercase tracking-tighter">{label}</span>
+      <span className="text-[10px] font-medium tracking-tight uppercase tracking-tighter">{label}</span>
+    </button>
+  );
+
+  const SidebarItem = ({ icon: Icon, active, onClick, label }: { icon: any; active: boolean; onClick: () => void; label: string }) => (
+    <button 
+      onClick={onClick}
+      className={`group relative flex flex-col items-center justify-center w-12 h-12 rounded-xl transition-all ${active ? 'bg-cyan-400 text-black shadow-[0_0_20px_rgba(34,211,238,0.4)]' : 'text-white/40 hover:text-white hover:bg-white/5'}`}
+      title={label}
+    >
+      <Icon className="w-6 h-6" />
+      <span className="absolute left-full ml-4 px-2 py-1 bg-cyan-400 text-black text-[10px] font-bold rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+        {label}
+      </span>
+      {active && (
+        <motion.div 
+          layoutId="sidebar-active"
+          className="absolute -left-4 w-1 h-8 bg-cyan-400 rounded-r-full neon-glow-cyan"
+        />
+      )}
     </button>
   );
 
@@ -323,7 +810,7 @@ export default function App() {
       <div className={`${isMain ? 'bg-cyan-400/10 p-2 rounded-full border border-cyan-400/30' : ''}`}>
         <Icon className={`w-5 h-5 ${isMain || active ? 'neon-text-cyan' : ''}`} />
       </div>
-      <span className="text-[8px] font-orbitron uppercase tracking-tighter opacity-60">{label}</span>
+      <span className="text-[8px] font-medium tracking-tight uppercase tracking-tighter opacity-60">{label}</span>
     </button>
   );
 
@@ -333,7 +820,7 @@ export default function App() {
       className={`flex items-center gap-2 px-3 py-1 rounded-lg text-xs transition-all whitespace-nowrap ${active ? 'text-violet-400 bg-violet-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
     >
       {Icon && <Icon className="w-3 h-3" />}
-      <span className="font-rajdhani">{label}</span>
+      <span className="font-sans">{label}</span>
     </button>
   );
 
@@ -353,7 +840,7 @@ export default function App() {
               transition={{ duration: 1.5, ease: "easeOut" }}
               className="flex flex-col items-center gap-4"
             >
-              <h1 className="text-6xl md:text-8xl font-orbitron font-black text-white tracking-[1.2em] neon-text-cyan ml-[1.2em]">
+              <h1 className="text-6xl md:text-8xl font-black tracking-tight text-white tracking-[1.2em] neon-text-cyan ml-[1.2em]">
                 SONNOR
               </h1>
               <motion.div 
@@ -367,7 +854,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <div className="h-screen w-full bg-[#050505] text-white flex flex-col overflow-hidden relative">
+      <div className={`h-screen w-full bg-[#050505] text-white flex flex-col overflow-hidden relative ${activeTab === 'dj' ? 'force-landscape' : ''}`}>
       {/* Dynamic Background */}
       <div 
         className="fixed inset-0 z-0 transition-all duration-1000"
@@ -392,43 +879,33 @@ export default function App() {
       <header className="z-20 border-b border-white/5 bg-[#050505]/80 backdrop-blur-xl sticky top-0">
         <div className="px-4 md:px-6 py-3 md:py-4 flex justify-between items-center">
           <div className="flex items-center gap-4 md:gap-8">
-            <h1 className="font-orbitron text-lg md:text-xl font-bold tracking-widest neon-text-cyan shrink-0">
+            <h1 className="font-medium tracking-tight text-lg md:text-xl font-bold tracking-widest neon-text-cyan shrink-0">
               SONNOR
             </h1>
-            
-            {/* Main Navigation (Desktop) */}
-            <nav className="hidden md:flex items-center gap-1 overflow-x-auto no-scrollbar">
-              <NavItem 
-                icon={Music} 
-                label="Música" 
-                active={activeTab === 'musica'} 
-                onClick={() => { setActiveTab('musica'); setView('library'); }} 
-              />
-              <NavItem 
-                icon={Disc} 
-                label="Álbum" 
-                active={activeTab === 'album'} 
-                onClick={() => setActiveTab('album')} 
-              />
-              <NavItem 
-                icon={ListMusic} 
-                label="Playlist" 
-                active={activeTab === 'playlist'} 
-                onClick={() => setActiveTab('playlist')}
-              />
-              <NavItem 
-                icon={Settings} 
-                label="Definição" 
-                active={activeTab === 'definicao'} 
-                onClick={() => setActiveTab('definicao')} 
-              />
-            </nav>
           </div>
 
-          <div className="flex gap-2 md:gap-4 items-center">
+          <div className="flex gap-2 md:gap-4 items-center flex-1 justify-end">
+            <div className="relative hidden sm:block max-w-xs w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
+              <input 
+                type="text"
+                placeholder="Pesquisar..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-full py-1.5 pl-10 pr-10 text-sm focus:outline-none focus:border-cyan-400/50 transition-all font-sans"
+              />
+              {searchTerm && (
+                <button 
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
             <button 
               onClick={scanDirectory}
-              className="flex items-center gap-2 px-3 md:px-4 py-1.5 md:py-2 bg-cyan-400 text-black rounded-lg md:rounded-xl font-rajdhani font-bold hover:scale-105 transition-all shadow-[0_0_15px_rgba(34,211,238,0.4)]"
+              className="flex items-center gap-2 px-3 md:px-4 py-1.5 md:py-2 bg-cyan-400 text-black rounded-lg md:rounded-xl font-sans font-bold hover:scale-105 transition-all shadow-[0_0_15px_rgba(34,211,238,0.4)]"
             >
               <Upload className="w-3.5 h-3.5 md:w-4 h-4" />
               <span className="text-xs md:text-base hidden sm:inline">Sincronizar</span>
@@ -458,6 +935,12 @@ export default function App() {
             onClick={() => setActiveTab('playlist')}
           />
           <NavItem 
+            icon={Disc3} 
+            label="DJ" 
+            active={activeTab === 'dj'} 
+            onClick={() => { setActiveTab('dj'); setView('library'); }} 
+          />
+          <NavItem 
             icon={Settings} 
             label="Definição" 
             active={activeTab === 'definicao'} 
@@ -474,7 +957,7 @@ export default function App() {
               exit={{ height: 0, opacity: 0 }}
               className="px-4 md:px-6 py-2 border-t border-white/5 bg-white/5 flex items-center gap-2 overflow-x-auto no-scrollbar"
             >
-              <span className="text-[10px] uppercase tracking-widest text-white/20 font-orbitron mr-2 shrink-0">Playlist:</span>
+              <span className="text-[10px] uppercase tracking-widest text-white/20 font-medium tracking-tight mr-2 shrink-0">Playlist:</span>
               <NavSubItem 
                 label="Playlist" 
                 active={activeTab === 'playlist' && activeSubTab === 'playlist'} 
@@ -505,6 +988,40 @@ export default function App() {
       </header>
 
       <div className="flex flex-1 overflow-hidden z-10">
+        {/* Sidebar Navigation (Desktop) */}
+        <aside className="hidden md:flex flex-col w-20 border-r border-white/5 bg-[#050505]/40 backdrop-blur-md py-6 items-center gap-8 shrink-0">
+          <SidebarItem 
+            icon={Music} 
+            active={activeTab === 'musica'} 
+            onClick={() => { setActiveTab('musica'); setView('library'); }} 
+            label="Música"
+          />
+          <SidebarItem 
+            icon={Disc} 
+            active={activeTab === 'album'} 
+            onClick={() => setActiveTab('album')} 
+            label="Álbum"
+          />
+          <SidebarItem 
+            icon={ListMusic} 
+            active={activeTab === 'playlist'} 
+            onClick={() => setActiveTab('playlist')}
+            label="Playlist"
+          />
+          <SidebarItem 
+            icon={Disc3} 
+            active={activeTab === 'dj'} 
+            onClick={() => { setActiveTab('dj'); setView('library'); }} 
+            label="DJ"
+          />
+          <SidebarItem 
+            icon={Settings} 
+            active={activeTab === 'definicao'} 
+            onClick={() => setActiveTab('definicao')} 
+            label="Definição"
+          />
+        </aside>
+
         {/* Main Content */}
         <main className="flex-1 px-4 md:px-6 pb-32 md:pb-24 overflow-y-auto relative no-scrollbar">
           <AnimatePresence mode="wait">
@@ -528,11 +1045,33 @@ export default function App() {
                   </button>
                 </div>
 
-                {activeTab === 'definicao' ? (
+                {/* Mobile Search Bar */}
+                <div className="sm:hidden relative mb-4">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
+                  <input 
+                    type="text"
+                    placeholder="Pesquisar músicas..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-10 pr-10 text-sm focus:outline-none focus:border-cyan-400/50 transition-all font-sans"
+                  />
+                  {searchTerm && (
+                    <button 
+                      onClick={() => setSearchTerm('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {activeTab === 'dj' ? (
+                  <VirtualDJ playlist={playlist} />
+                ) : activeTab === 'definicao' ? (
                   <div className="space-y-6 pb-10">
                     {/* Background Selection */}
                     <section className="space-y-3">
-                      <h3 className="text-sm font-orbitron text-cyan-400/80 tracking-widest flex items-center gap-2">
+                      <h3 className="text-sm font-medium tracking-tight text-cyan-400/80 tracking-widest flex items-center gap-2">
                         <Disc className="w-4 h-4" /> PAPEL DE PAREDE
                       </h3>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -557,7 +1096,7 @@ export default function App() {
 
                     {/* Sleep Timer */}
                     <section className="space-y-3">
-                      <h3 className="text-sm font-orbitron text-cyan-400/80 tracking-widest flex items-center gap-2">
+                      <h3 className="text-sm font-medium tracking-tight text-cyan-400/80 tracking-widest flex items-center gap-2">
                         <Clock className="w-4 h-4" /> TEMPORIZADOR (SLEEP)
                       </h3>
                       <div className="flex flex-wrap gap-2">
@@ -565,7 +1104,7 @@ export default function App() {
                           <button
                             key={time === null ? 'off' : time}
                             onClick={() => setSleepTimer(time)}
-                            className={`px-4 py-2 rounded-lg font-rajdhani text-sm transition-all ${sleepTimer === time ? 'bg-cyan-400 text-black font-bold' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
+                            className={`px-4 py-2 rounded-lg font-sans text-sm transition-all ${sleepTimer === time ? 'bg-cyan-400 text-black font-bold' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
                           >
                             {time === null ? 'Desligado' : `${time} min`}
                           </button>
@@ -578,7 +1117,7 @@ export default function App() {
 
                     {/* Language Selection */}
                     <section className="space-y-3">
-                      <h3 className="text-sm font-orbitron text-cyan-400/80 tracking-widest flex items-center gap-2">
+                      <h3 className="text-sm font-medium tracking-tight text-cyan-400/80 tracking-widest flex items-center gap-2">
                         <List className="w-4 h-4" /> IDIOMA
                       </h3>
                       <div className="flex gap-2">
@@ -590,7 +1129,7 @@ export default function App() {
                           <button
                             key={lang.code}
                             onClick={() => setLanguage(lang.code)}
-                            className={`px-4 py-2 rounded-lg font-rajdhani text-sm transition-all ${language === lang.code ? 'bg-violet-500 text-white font-bold' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
+                            className={`px-4 py-2 rounded-lg font-sans text-sm transition-all ${language === lang.code ? 'bg-violet-500 text-white font-bold' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
                           >
                             {lang.name}
                           </button>
@@ -600,13 +1139,13 @@ export default function App() {
 
                     {/* Equalizer */}
                     <section className="space-y-4">
-                      <h3 className="text-sm font-orbitron text-cyan-400/80 tracking-widest flex items-center gap-2">
+                      <h3 className="text-sm font-medium tracking-tight text-cyan-400/80 tracking-widest flex items-center gap-2">
                         <TrendingUp className="w-4 h-4" /> EQUALIZADOR
                       </h3>
                       <div className="space-y-6 bg-white/5 p-6 rounded-2xl border border-white/10">
                         {(['bass', 'mid', 'treble'] as const).map((band) => (
                           <div key={band} className="space-y-2">
-                            <div className="flex justify-between text-[10px] font-orbitron text-white/40 uppercase tracking-tighter">
+                            <div className="flex justify-between text-[10px] font-medium tracking-tight text-white/40 uppercase tracking-tighter">
                               <span>{band}</span>
                               <span className="text-cyan-400">{equalizer[band]}%</span>
                             </div>
@@ -641,52 +1180,80 @@ export default function App() {
                       <Music className="w-16 h-16 md:w-24 h-24 text-white/20 relative z-10" />
                     </div>
                     <div className="space-y-2">
-                      <h3 className="text-xl md:text-2xl font-orbitron font-bold text-white/80">Biblioteca Vazia</h3>
-                      <p className="text-xs md:text-sm text-white/40 font-rajdhani max-w-xs mx-auto">
+                      <h3 className="text-xl md:text-2xl font-medium tracking-tight font-bold text-white/80">Biblioteca Vazia</h3>
+                      <p className="text-xs md:text-sm text-white/40 font-sans max-w-xs mx-auto">
                         Para começar a ouvir, conceda permissão para o SONNOR ler as músicas do seu dispositivo.
                       </p>
                     </div>
                     <button 
                       onClick={scanDirectory}
-                      className="px-6 md:px-8 py-3 md:py-4 bg-cyan-400 text-black rounded-full font-orbitron text-xs md:text-sm font-bold tracking-widest hover:scale-105 transition-all shadow-[0_0_30px_rgba(34,211,238,0.3)]"
+                      className="px-6 md:px-8 py-3 md:py-4 bg-cyan-400 text-black rounded-full font-medium tracking-tight text-xs md:text-sm font-bold tracking-widest hover:scale-105 transition-all shadow-[0_0_30px_rgba(34,211,238,0.3)]"
                     >
                       PERMITIR ACESSO
                     </button>
                   </div>
-                ) : (
-                  playlist.map((track, index) => (
-                    <motion.div 
-                      key={track.id}
-                      whileHover={{ scale: 1.01 }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={() => playTrack(track)}
+                ) : filteredPlaylist.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-[40vh] text-center space-y-4">
+                    <Search className="w-12 h-12 text-white/10" />
+                    <p className="text-white/40 font-sans">Nenhum resultado encontrado para "{searchTerm}"</p>
+                    <button 
+                      onClick={() => setSearchTerm('')}
+                      className="text-cyan-400 text-xs hover:underline"
                     >
-                      <GlassBox className={`flex items-center gap-3 md:gap-4 cursor-pointer border-l-4 transition-all ${currentTrack?.id === track.id ? 'border-l-cyan-400 bg-white/10' : 'border-l-transparent'}`}>
-                        <div className="w-6 text-center font-mono text-[10px] text-white/30 flex-shrink-0">
-                          {(index + 1).toString().padStart(2, '0')}
-                        </div>
-                        <div className="w-10 h-10 md:w-12 h-12 rounded-lg overflow-hidden bg-white/5 flex-shrink-0">
-                          <img src={track.cover} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-semibold truncate text-sm md:text-base text-white/90">{track.title}</h3>
-                          <p className="text-xs md:text-sm text-white/50 truncate font-rajdhani">{track.artist}</p>
-                        </div>
-                        {currentTrack?.id === track.id && isPlaying && (
-                          <div className="flex gap-0.5 md:gap-1 items-end h-3 md:h-4">
-                            {[1, 2, 3, 4].map(i => (
-                              <motion.div 
-                                key={i}
-                                animate={{ height: [4, 12, 4] }}
-                                transition={{ repeat: Infinity, duration: 0.5, delay: i * 0.1 }}
-                                className="w-0.5 md:w-1 bg-cyan-400 rounded-full"
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </GlassBox>
-                    </motion.div>
-                  ))
+                      Limpar pesquisa
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex-1 w-full h-full min-h-[400px]">
+                    <AutoSizer renderProp={({ height, width }) => (
+                        <ListWindow
+                          height={height || 400}
+                          itemCount={filteredPlaylist.length}
+                          itemSize={80}
+                          width={width || 400}
+                          className="custom-scrollbar"
+                        >
+                          {({ index, style }) => {
+                            const track = filteredPlaylist[index];
+                            return (
+                              <div style={style} className="pr-2 pb-2">
+                                <motion.div 
+                                  key={track.id}
+                                  whileHover={{ scale: 1.01 }}
+                                  whileTap={{ scale: 0.98 }}
+                                  onClick={() => playTrack(track)}
+                                >
+                                  <GlassBox className={`flex items-center gap-3 md:gap-4 cursor-pointer border-l-4 transition-all ${currentTrack?.id === track.id ? 'border-l-cyan-400 bg-white/10' : 'border-l-transparent'}`}>
+                                    <div className="w-6 text-center font-mono text-[10px] text-white/30 flex-shrink-0">
+                                      {(index + 1).toString().padStart(2, '0')}
+                                    </div>
+                                    <div className="w-10 h-10 md:w-12 h-12 rounded-lg overflow-hidden bg-white/5 flex-shrink-0">
+                                      <img src={track.cover} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <h3 className="font-semibold truncate text-sm md:text-base text-white/90">{track.title}</h3>
+                                      <p className="text-xs md:text-sm text-white/50 truncate font-sans">{track.artist}</p>
+                                    </div>
+                                    {currentTrack?.id === track.id && isPlaying && (
+                                      <div className="flex gap-0.5 md:gap-1 items-end h-3 md:h-4">
+                                        {[1, 2, 3, 4].map(i => (
+                                          <motion.div 
+                                            key={i}
+                                            animate={{ height: [4, 12, 4] }}
+                                            transition={{ repeat: Infinity, duration: 0.5, delay: i * 0.1 }}
+                                            className="w-0.5 md:w-1 bg-cyan-400 rounded-full"
+                                          />
+                                        ))}
+                                      </div>
+                                    )}
+                                  </GlassBox>
+                                </motion.div>
+                              </div>
+                            );
+                          }}
+                        </ListWindow>
+                      )} />
+                  </div>
                 )}
               </motion.div>
             ) : (
@@ -708,7 +1275,7 @@ export default function App() {
                   >
                     <ChevronDown className="w-8 h-8" />
                   </button>
-                  <span className="font-orbitron text-xs tracking-[0.3em] text-cyan-400/60">NOW PLAYING</span>
+                  <span className="font-medium tracking-tight text-xs tracking-[0.3em] text-cyan-400/60">NOW PLAYING</span>
                   <button className="text-white/60 p-2 hover:bg-white/5 rounded-full transition-all">
                     <ListMusic className="w-6 h-6" />
                   </button>
@@ -736,12 +1303,9 @@ export default function App() {
 
                 {/* Track Info */}
                 <div className="text-center space-y-2 z-10">
-                  <h2 className="text-2xl md:text-4xl font-orbitron font-bold text-white neon-text-cyan px-4">
+                  <h2 className="text-2xl md:text-4xl font-medium tracking-tight font-bold text-white neon-text-cyan px-4">
                     {currentTrack?.title || "No Track Selected"}
                   </h2>
-                  <p className="text-lg md:text-2xl text-white/50 font-rajdhani tracking-widest uppercase">
-                    {currentTrack?.artist || "Unknown Artist"}
-                  </p>
                 </div>
 
                 {/* Controls & Slider */}
